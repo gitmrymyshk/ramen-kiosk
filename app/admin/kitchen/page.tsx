@@ -1,0 +1,163 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { supabase } from "@/lib/supabase";
+
+type Order = {
+  id: string;
+  items: any[];
+  total: number;
+  created_at: string;
+  status: string;
+  seat_no: number | null;
+};
+
+export default function KitchenPage() {
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const fetchOrders = async () => {
+    setErrorMsg(null);
+    const { data, error } = await supabase
+      .from("orders")
+      .select("id, items, total, created_at, seat_no, status")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      setErrorMsg(error.message);
+      return;
+    }
+    setOrders((data ?? []) as any);
+  };
+
+  useEffect(() => {
+    // 初回ロード
+    fetchOrders();
+
+    // Realtime購読（ordersテーブルに変更があったら更新）
+    const channel = supabase
+        .channel("orders-realtime")
+        .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "orders" },
+        () => {
+            fetchOrders();
+        }
+        )
+        .subscribe();
+
+    // 終了時に購読解除（重要）
+    return () => {
+        supabase.removeChannel(channel);
+    };
+  }, []);
+
+    // 表示順
+    const visibleOrders = orders
+    .filter((o) => o.status !== "closed") // closedは除外
+    .sort((a, b) => {
+        if (a.status === "done" && b.status !== "done") return 1;
+        if (a.status !== "done" && b.status === "done") return -1;
+        return 0;
+    });
+
+  return (
+    <main className="min-h-screen bg-gray-100 p-6">
+      <div className="max-w-2xl mx-auto space-y-4">
+        <h1 className="text-3xl font-bold">🍜 キッチン画面</h1>
+
+        <button
+          onClick={fetchOrders}
+          className="border rounded-lg px-3 py-2 bg-white"
+        >
+          更新
+        </button>
+
+        {errorMsg && (
+          <div className="bg-red-50 border border-red-200 text-red-700 p-3 rounded">
+            エラー: {errorMsg}
+          </div>
+        )}
+
+        <div className="space-y-4">
+          {visibleOrders.map((order) => (
+            <div
+            key={order.id}
+            className={[
+                "p-4 rounded-xl shadow",
+                order.status === "done" ? "bg-gray-100 text-gray-500" : "bg-white",
+            ].join(" ")}
+            >
+              <div className="text-xs text-gray-500">
+                注文ID: {order.id}
+              </div>
+              <div className="text-xs text-gray-500">
+                注文時刻: {new Date(order.created_at).toLocaleString()}
+              </div>
+              <div className="text-sm">
+                状態：
+                {order.status === "new" && (
+                    <span className="ml-2 px-2 py-0.5 text-xs font-bold text-white bg-red-600 rounded">
+                    NEW
+                    </span>
+                )}
+                {order.status === "seated" && (
+                    <span className="ml-2 px-2 py-0.5 text-xs font-bold text-white bg-blue-600 rounded">
+                    SEATED
+                    </span>
+                )}
+                {order.status === "done" && (
+                    <span className="ml-2 px-2 py-0.5 text-xs font-bold text-white bg-gray-500 rounded">
+                    DONE
+                    </span>
+                )}
+              </div>
+              <div className="text-sm">
+                席：<span className="font-semibold">{order.seat_no ?? "未割当"}</span>
+              </div>
+
+              <div className="mt-3 space-y-1">
+                {Array.isArray(order.items) ? (
+                  order.items.map((item: any, index: number) => (
+                    <div key={index} className="font-medium">
+                      {item?.name ?? "item"} × {item?.quantity ?? 1}
+                    </div>
+                  ))
+                ) : (
+                  <div className="text-sm text-gray-600">
+                    itemsの形式が想定と違います（配列じゃない）
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-3 font-bold">合計: {order.total}円</div>
+              <div className="mt-4 flex gap-2">
+                {order.status !== "done" ? (
+                    <button
+                    className="px-3 py-2 rounded-lg bg-black text-white"
+                    onClick={async () => {
+                        const { error } = await supabase
+                        .from("orders")
+                        .update({ status: "done" })
+                        .eq("id", order.id);
+
+                        if (error) alert("更新失敗: " + error.message);
+                    }}
+                    >
+                    調理完了
+                    </button>
+                ) : (
+                    <span className="text-sm text-gray-500">完了済み</span>
+                )}
+                </div>
+            </div>
+          ))}
+
+          {orders.length === 0 && (
+            <div className="text-gray-600">注文がまだありません</div>
+          )}
+        </div>
+      </div>
+    </main>
+  );
+}
